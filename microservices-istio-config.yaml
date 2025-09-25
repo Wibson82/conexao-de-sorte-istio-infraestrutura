@@ -1,0 +1,208 @@
+# ============================================================================
+# 🕸️ CONFIGURAÇÕES ISTIO PARA MICROSSERVIÇOS - CONEXÃO DE SORTE
+# ============================================================================
+# Configurações específicas de Istio para cada microsserviço seguindo
+# padrão de nomenclatura: conexao-de-sorte-backend-{nome}
+# ============================================================================
+
+# ========================================
+# 🔐 AUTENTICAÇÃO - DESTINATION RULES
+# ========================================
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: conexao-de-sorte-backend-autenticacao
+  namespace: default
+spec:
+  host: conexao-de-sorte-backend-autenticacao.default.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+    connectionPool:
+      tcp:
+        maxConnections: 100
+      http:
+        http1MaxPendingRequests: 50
+        maxRequestsPerConnection: 10
+    circuitBreaker:
+      consecutiveGatewayErrors: 5
+      consecutive5xxErrors: 5
+      interval: 30s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+    loadBalancer:
+      simple: LEAST_CONN
+
+---
+# ========================================
+# 💬 BATE-PAPO - DESTINATION RULES
+# ========================================
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: conexao-de-sorte-backend-batepapo
+  namespace: default
+spec:
+  host: conexao-de-sorte-backend-batepapo.default.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+    connectionPool:
+      tcp:
+        maxConnections: 200
+      http:
+        http1MaxPendingRequests: 100
+        maxRequestsPerConnection: 20
+    circuitBreaker:
+      consecutiveGatewayErrors: 3
+      consecutive5xxErrors: 3
+      interval: 30s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+    loadBalancer:
+      simple: ROUND_ROBIN
+
+---
+# ========================================
+# 💰 FINANCEIRO - DESTINATION RULES
+# ========================================
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: conexao-de-sorte-backend-financeiro
+  namespace: default
+spec:
+  host: conexao-de-sorte-backend-financeiro.default.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+    connectionPool:
+      tcp:
+        maxConnections: 50
+      http:
+        http1MaxPendingRequests: 25
+        maxRequestsPerConnection: 5
+    circuitBreaker:
+      consecutiveGatewayErrors: 2
+      consecutive5xxErrors: 2
+      interval: 60s
+      baseEjectionTime: 60s
+      maxEjectionPercent: 25
+    loadBalancer:
+      simple: LEAST_CONN
+
+---
+# ========================================
+# 🛡️ AUTHORIZATION POLICIES POR SERVIÇO
+# ========================================
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: conexao-de-sorte-backend-autenticacao-policy
+  namespace: default
+spec:
+  selector:
+    matchLabels:
+      app: conexao-de-sorte-backend-autenticacao
+  rules:
+  # Permitir acesso público aos endpoints de autenticação
+  - to:
+    - operation:
+        paths: ["/api/auth/login", "/api/auth/register", "/api/auth/refresh"]
+        methods: ["POST"]
+  # Permitir acesso aos endpoints protegidos apenas com JWT válido
+  - from:
+    - source:
+        requestPrincipals: ["*"]
+    to:
+    - operation:
+        paths: ["/api/auth/profile", "/api/auth/logout"]
+        methods: ["GET", "POST"]
+
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: conexao-de-sorte-backend-financeiro-policy
+  namespace: default
+spec:
+  selector:
+    matchLabels:
+      app: conexao-de-sorte-backend-financeiro
+  rules:
+  # Apenas usuários autenticados podem acessar endpoints financeiros
+  - from:
+    - source:
+        requestPrincipals: ["*"]
+    to:
+    - operation:
+        methods: ["GET", "POST", "PUT"]
+    when:
+    - key: request.headers[x-user-role]
+      values: ["admin", "financial", "user"]
+
+---
+# ========================================
+# 🔄 VIRTUAL SERVICES PARA TRAFFIC MANAGEMENT
+# ========================================
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: conexao-de-sorte-backend-autenticacao-vs
+  namespace: default
+spec:
+  hosts:
+  - conexao-de-sorte-backend-autenticacao.default.svc.cluster.local
+  http:
+  - match:
+    - uri:
+        prefix: "/api/auth"
+    route:
+    - destination:
+        host: conexao-de-sorte-backend-autenticacao.default.svc.cluster.local
+        port:
+          number: 8081
+    timeout: 30s
+    retries:
+      attempts: 3
+      perTryTimeout: 10s
+      retryOn: gateway-error,connect-failure,refused-stream
+
+---
+# ========================================
+# 🌍 SERVICE ENTRIES PARA SERVIÇOS EXTERNOS
+# ========================================
+apiVersion: networking.istio.io/v1beta1
+kind: ServiceEntry
+metadata:
+  name: azure-keyvault
+  namespace: default
+spec:
+  hosts:
+  - "*.vault.azure.net"
+  ports:
+  - number: 443
+    name: https
+    protocol: HTTPS
+  location: MESH_EXTERNAL
+  resolution: DNS
+
+---
+apiVersion: networking.istio.io/v1beta1
+kind: ServiceEntry
+metadata:
+  name: lottery-apis
+  namespace: default
+spec:
+  hosts:
+  - "api.caixa.gov.br"
+  - "servicebus2.caixa.gov.br"
+  ports:
+  - number: 443
+    name: https
+    protocol: HTTPS
+  - number: 80
+    name: http
+    protocol: HTTP
+  location: MESH_EXTERNAL
+  resolution: DNS
